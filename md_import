@@ -1,0 +1,163 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+import re
+import csv
+import sys
+import json
+import pprint
+import urllib
+# from python-slugify
+import slugify
+# from python-requests
+import requests
+
+from md_tools import config
+
+ORG_MAP = {
+    'TSB': 'br_tsb',
+}
+
+DEBUG = False
+
+def create_dataset(dataset_dict):
+    api_endpoint = '/api/action/package_create'
+
+    headers = {
+            'Authorization': config.ckan_apikey,
+            'Content-Type': 'application/x-www-form-urlencoded',
+            }
+    in_dict = urllib.quote(json.dumps(dataset_dict))
+    r = requests.post(config.ckan_url + api_endpoint, data=in_dict, headers=headers)
+    if not r.ok:
+        print "Request not ok, code: {}, message: {}".format(
+                r.status_code,
+                r.reason)
+        pprint.pprint(json.loads(r.content))
+
+    return r.ok
+
+
+def freqiso8601(x):
+    # freqiso8601("1x rok") = "R/1Y"
+    # freqiso8601("1x 2 roky") = "R/2Y"
+    # freqiso8601("1x za 2 roky") = "R/2Y"
+    # freqiso8601("30 minut") = "R/30M"
+    # freqiso8601("denn\xc4\x9b") = "R/1D"
+    if x == 'denně':
+        return "R/1D"
+    elif x == 'měsíčně':
+        return "R/1M"
+    elif x == 'ročně':
+        return "R/1Y"
+    elif x == 'čtvrtletně':
+        return "R/4M"
+    elif x == '1x rok':
+        return "R/1Y"
+    elif x == '1x měsíc':
+        return "R/1M"
+    elif x == '1x týdně':
+        return "R/7D"
+    elif "minut" in x:
+        m = re.match(r'(1x\s)?(za\s)?(\d+)\s(minut)', x)
+        if m and m.groups()[2]:
+            try:
+                n = int(m.groups()[2])
+                return "R/T{}M".format(n)
+            except:
+                pass
+
+    elif "rok" in x or "let" in x:
+        m = re.match(r'(1x\s)?(za\s)?(\d+)\s(roky?|let)', x)
+        if m and m.groups()[2]:
+            try:
+                n = int(m.groups()[2])
+                return "R/{}Y".format(n)
+            except:
+                pass
+
+    elif "ročně" in x:
+        m = re.match(r'(\d+)(x|X) ročně', x)
+        if m and m.groups()[0]:
+            try:
+                n = 12 / int(m.groups()[0])
+                return "R/{}M".format(n)
+            except:
+                pass
+    else:
+        return None
+
+def import_csv(file):
+    with open(file) as f:
+        reader = list(csv.reader(f))
+
+    for item in reader[1:]:
+        org_shortcut = item[1]
+        name = item[2]
+        desc = item[3]
+        state = item[4]
+        periodicity = item[5]
+        maintainer  = item[6]
+        maintainer_email  = item[7]
+        md_primary_source = item[8]
+        #data_owner = item[9]
+        #publisher_name = item[10]
+        #mestka_data = item[11]
+        #otevrena_data = item[12]
+        md_published_at = item[13]
+
+        # TODO 4 LADA
+        # (14, 'Pozn\xc3\xa1mka'),
+        # (15, 'rozd\xc3\xadl'),
+        # (16, ''),
+        # (17, 'z\xc3\xa1konn\xc3\xa1 povinnost'),
+        # (18, 'http://opendata.gov.cz/datova-sada:prestupky'),
+        # (19, 'definice je'),
+        # (20, '32'),
+        # (21, ''),
+        # (22, ''),
+        # (23, '')]
+
+        if org_shortcut in ORG_MAP:
+
+            freq = freqiso8601(periodicity)
+
+            #print periodicity
+            #print freq
+
+            extras = {}
+            if freq:
+                extras["frequency"] = freq
+
+            if md_primary_source:
+                extras["md_primary_source"] = md_primary_source
+
+            if md_published_at:
+                extras["md_published_at"] = md_published_at
+
+            packed_extras = []
+            for k,v in extras.items():
+                packed_extras.append(dict(key=k, value=v))
+
+            dataset_dict = {
+                'title': name,
+                'name': slugify.slugify(name, max_length=100, word_boundary=True),
+                'notes': desc,
+                'owner_org': ORG_MAP[org_shortcut],
+                'maintainer': maintainer,
+                'maintainer_email': maintainer_email,
+                'extras': packed_extras
+                }
+
+            if DEBUG:
+                pprint.pprint(dataset_dict)
+
+            print "=" * 60
+            print "Creating dataset {}".format(name)
+            create_dataset(dataset_dict)
+
+if __name__ == "__main__":
+    if len(sys.argv) != 2:
+        print("Usage: md_import FILE")
+    else:
+        import_csv(sys.argv[1])
