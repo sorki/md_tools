@@ -1,2 +1,3 @@
-slugify
 requests
+python-slugify==1.2.4
+
